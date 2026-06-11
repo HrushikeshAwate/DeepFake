@@ -1,4 +1,3 @@
-
 import streamlit as st
 import os
 import random
@@ -6,8 +5,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
-import matplotlib.pyplot as plt
 from torchvision import transforms, models
+
+# Force Matplotlib to use a headless/non-interactive backend BEFORE importing pyplot
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 # XAI Packages
 import shap
@@ -15,8 +18,12 @@ from captum.attr import LayerGradCam
 from lime import lime_image
 from skimage.segmentation import mark_boundaries
 
-# Set page configuration
-st.set_page_config(page_title="Multi-Class Deepfake Forensic Suite", layout="wide")
+# Set clean page configuration
+st.set_page_config(
+    page_title="Multi-Class Deepfake Forensic Suite", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.title("🛡️ Multi-Class Deepfake Forensic Verification Dashboard")
 st.markdown("Upload a facial profile image to compute cross-framework feature attributions (Grad-CAM, LIME, SHAP) and visualize structural anomalies.")
@@ -32,22 +39,29 @@ val_test_transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# Load Model Architecture (Cached to prevent reload delays)
+# Load Model Architecture (Cached to prevent reload delays on user actions)
 @st.cache_resource
 def load_forensic_model():
     model = models.efficientnet_b0(weights=None)
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, 4)
-    if os.path.exists('best_deepfake_model.pth'):
-        model.load_state_dict(torch.load('best_deepfake_model.pth', map_location=device))
+    
+    # Searches directly in the root directory of your GitHub repository deployment
+    weights_path = 'best_deepfake_model.pth'
+        
+    if os.path.exists(weights_path):
+        model.load_state_dict(torch.load(weights_path, map_location=device))
+    else:
+        st.sidebar.error(f"⚠️ Warning: '{weights_path}' not found in the root directory. Please upload it to your GitHub repository.")
+        
     model = model.to(device)
     model.eval()
     return model
 
 try:
     model = load_forensic_model()
-    st.sidebar.success("✅ Forensic Network Weights Loaded!")
+    st.sidebar.success("✅ Forensic Network Weights Active!")
 except Exception as e:
-    st.sidebar.error(f"❌ Weight File Error: {e}")
+    st.sidebar.error(f"❌ Initialization Error: {e}")
 
 # Map normalizer utility
 def normalize_map(attr_map):
@@ -56,7 +70,7 @@ def normalize_map(attr_map):
         return (attr_map - attr_min) / (attr_max - attr_min)
     return np.zeros_like(attr_map)
 
-# Dashboard File Uploaders
+# Dashboard File Uploader
 uploaded_file = st.file_uploader("📂 Select an input facial image (JPG, JPEG, PNG)...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
@@ -93,7 +107,7 @@ if uploaded_file is not None:
         # A. Grad-CAM Calculation
         target_layer = model.features[-1]
         lgc = LayerGradCam(model, target_layer)
-        gc_attr = lgc.attribute(img_tensor, target=pred_class)
+        gc_attr = lgc.attribute(img_tensor, target=int(pred_class))
         gc_upsampled = LayerGradCam.interpolate(gc_attr, (224, 224), interpolate_mode="bilinear")
         gc_map = gc_upsampled.squeeze().cpu().detach().numpy()
         if len(gc_map.shape) == 3:
@@ -112,7 +126,7 @@ if uploaded_file is not None:
         explanation = lime_explainer.explain_instance(original_img_np, batch_predict, top_labels=4, hide_color=0, num_samples=100)
         lime_map = np.zeros((224, 224))
         segments = explanation.segments
-        for seg_id, weight in explanation.local_exp[pred_class]:
+        for seg_id, weight in explanation.local_exp[int(pred_class)]:
             lime_map[segments == seg_id] = np.abs(weight)
         lime_map_norm = normalize_map(lime_map)
 
@@ -120,7 +134,7 @@ if uploaded_file is not None:
         from captum.attr import GradientShap
         shap_engine = GradientShap(model)
         background = torch.zeros(1, 3, 224, 224).to(device)
-        shap_attr = shap_engine.attribute(img_tensor, baselines=background, target=pred_class)
+        shap_attr = shap_engine.attribute(img_tensor, baselines=background, target=int(pred_class))
         shap_map = np.mean(np.abs(shap_attr.squeeze().cpu().detach().numpy()), axis=0)
         shap_map_norm = normalize_map(shap_map)
 
@@ -156,4 +170,6 @@ if uploaded_file is not None:
     axes[3].set_title("📊 ENSEMBLE AVERAGE BLEND")
     axes[3].axis('off')
 
+    # Render layout safely inside Streamlit
     st.pyplot(fig)
+    plt.close(fig) # Clear memory references
