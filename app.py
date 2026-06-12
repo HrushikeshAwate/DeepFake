@@ -1,6 +1,8 @@
 import streamlit as st
 import os
 import random
+
+#for rebooting the app
 import numpy as np
 import torch
 import torch.nn as nn
